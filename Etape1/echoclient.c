@@ -2,12 +2,38 @@
  * echoclient.c - An echo client
  */
 #include "csapp.h"
+#include "types.h"
+
+void handle_response(response_t *resp, char *filename) {
+    switch(resp->type){
+        case GET:
+            if (resp->status == 0) {
+                //printf("Response from server: %.*s\n", (int)resp->dataSize, resp->data);
+                char path[MAXCHAR] = "./repClient/";
+                strcat(path, filename);
+                int fd = Open(path, O_WRONLY | O_CREAT, 0644);
+                Rio_writen(fd, resp->data, resp->dataSize);
+                Close(fd);
+            } else {
+                fprintf(stderr, "%s\n", resp->data);
+            }
+            break;
+        case PUT:
+            printf("Received PUT response from server\n");
+            break;
+        case LS:
+            printf("Received LS response from server\n");
+            break;
+        default:
+            fprintf(stderr, "Unknown response type\n");
+            return;
+    }
+}
 
 int main(int argc, char **argv)
 {
     int clientfd, port;
     char *host, buf[MAXLINE];
-    rio_t rio;
 
     if (argc != 3) {
         fprintf(stderr, "usage: %s <host> <port>\n", argv[0]);
@@ -29,14 +55,33 @@ int main(int argc, char **argv)
      * has not yet called "Accept" for this connection
      */
     printf("client connected to server OS\n"); 
-    
-    Rio_readinitb(&rio, clientfd);
 
     while (Fgets(buf, MAXLINE, stdin) != NULL) {
-        Rio_writen(clientfd, buf, strlen(buf));
-        if (Rio_readlineb(&rio, buf, MAXLINE) > 0) {
-            Fputs(buf, stdout);
+
+        //Send request to server
+        request_t req;
+        if (strcmp(strtok(buf, " "), "get") == 0) {
+            req.type = GET;
+        } else if (strcmp(strtok(buf, " "), "put") == 0) {
+            req.type = PUT;
+        } else if (strcmp(strtok(buf, " "), "ls") == 0) {
+            req.type = LS;
+        } else {
+            fprintf(stderr, "Invalid command. Use 'get', 'put' or 'ls'.\n");
+            continue;
+        }
+        strncpy(req.filename, strtok(NULL, " \n"), MAXLINE);
+
+        Rio_writen(clientfd, &req, sizeof(request_t));
+
+        //Receive response from server
+        response_t resp;
+        
+        if (Rio_readn(clientfd, &resp, sizeof(response_t)) > 0) {
+            handle_response(&resp, req.filename);
+            break;
         } else { /* the server has prematurely closed the connection */
+            fprintf(stderr, "Serveur a fermé la connexion\n");
             break;
         }
     }
