@@ -2,76 +2,13 @@
 #include "types.h"
 
 #define NPROC 5
-#define NB_SLAVES 5
+#define NB_SLAVES 2
 #define MASTER_PORT 2121
 #define SLAVE_REG_PORT 2120 //pour l'enregistrement des esclaves
 
 void handler(int sig);
 
 pid_t pool[NPROC];
-
-int apply_request(int connfd){
-    size_t n;
-    request_t req;
-    response_t resp;
-
-    //changed from while to if
-    while ((n = Rio_readn(connfd, &req, sizeof(request_t))) != 0) {
-        ntoh_req(&req);
-        switch(req.type) {
-            case GET:
-                printf("Handling GET request for file: %s\n", req.filename);
-                char path[MAXLINE] = "./repServeur/";
-                strcat(path, req.filename);
-                int fd = Open(path, O_RDONLY, 0);
-                write(STDOUT_FILENO, "Opened file descriptor:\n", 24);
-                char filebuf[MAXCHAR];
-
-                lseek(fd, req.offset, SEEK_SET); // on se positionne à l'offset spécifié dans la requête
-                // Transfert du fichier par blocs de MAXCHAR octets
-                resp.dataSize = Rio_readn(fd, filebuf, MAXCHAR);
-                do {
-                    if (resp.dataSize >= 0) {
-                        resp.status = 0; // success
-                        resp.endOfFile = false;
-                        memcpy(resp.data, filebuf, resp.dataSize);
-                    } else {
-                        resp.status = -1; // error
-                        memcpy(resp.data, "Erreur: le fichier n'existe pas", 32);
-                    }
-                    //printf("Sending response to client (status: %d, dataSize: %zd)\n", resp.status, resp.dataSize);
-                    hton_resp(&resp);
-                    Rio_writen(connfd, &resp, sizeof(response_t));
-
-                } while ((resp.dataSize = Rio_readn(fd, filebuf, MAXCHAR)) == MAXCHAR); // on continue tant qu'on peut lire des données du fichier
-
-                resp.endOfFile = true; // on indique que c'est la fin du fichier
-                hton_resp(&resp);
-                Rio_writen(connfd, &resp, sizeof(response_t)); // on envoie la réponse finale pour indiquer la fin du transfert
-
-            
-                Close(fd);
-                break;
-            case PUT:
-                printf("Handling PUT request for file: %s\n", req.filename);
-                break;
-            case LS:
-                printf("Handling LS request\n");
-                break;
-            case BYE:
-                printf("Handling BYE request. Closing connection.\n");
-                return 1; // on quitte la fonction pour fermer la connexion
-            default:
-                fprintf(stderr, "Unknown request type\n"); 
-                resp.status = -1; // error
-                memcpy(resp.data, "Erreur: Type de requête inconnu", 33);
-                hton_resp(&resp);
-                Rio_writen(connfd, &resp, sizeof(response_t));
-        }
-    }
-    
-    return 0;
-}
 
 //Gestionnaire de signal pour fermer proprement le pool
 void handler(int sig) {
@@ -84,33 +21,64 @@ void handler(int sig) {
 
 int main(int argc, char **argv)
 {
-    int listenfd, port;
+    int listenfd;
     socklen_t clientlen;
     struct sockaddr_in clientaddr;
     int pid;
 
-    port = 2121;
+    // infos pour chaque esclave : adresse IP + port
+    char slave_ips[NB_SLAVES][MAXLINE];
+    int slave_ports[NB_SLAVES];
 
-    listenfd = Open_listenfd(port);
+    int reg_listenfd = Open_listenfd(SLAVE_REG_PORT);
+    printf("Maître : en attente de %d esclave(s) sur le port %d...\n",
+           NB_SLAVES, SLAVE_REG_PORT);
+
+    for (int i = 0; i < NB_SLAVES; i++) {
+        clientlen = (socklen_t)sizeof(clientaddr);
+        int reg_connfd = Accept(reg_listenfd, (SA *)&clientaddr, &clientlen);
+
+        // l'esclave envoie un message PORT 
+        response_t reg_resp;
+        Rio_readn(reg_connfd, &reg_resp, sizeof(response_t));
+        ntoh_resp(&reg_resp);
+
+        if (reg_resp.type != PORT) {
+            fprintf(stderr, "Maître : message d'enregistrement inattendu de l'esclave %d\n", i);
+            Close(reg_connfd);
+            exit(1);
+        }
+
+        slave_ports[i] = reg_resp.status;
+        // on retient l'adresse IP transmise par l'esclave
+        strncpy(slave_ips[i], reg_resp.data, MAXLINE);
+        printf("Maître : esclave %d enregistré — %s:%d\n",
+               i, slave_ips[i], slave_ports[i]);
+
+        // confirmation a l'esclave
+        response_t conf_msg;
+        memset(&conf_msg, 0, sizeof(response_t));
+        conf_msg.type = PORT;
+        conf_msg.status = 0;
+
+        hton_resp(&conf_msg);
+        Rio_writen(reg_connfd, &conf_msg, sizeof(response_t));
+
+        Close(reg_connfd);
+    }
+
+    Close(reg_listenfd);
+    printf("Maître : tous les esclaves sont enregistrés. Prêt à accepter des clients.\n");
+
+    // Gestion de clients 
+    listenfd = Open_listenfd(MASTER_PORT);
     clientlen = (socklen_t)sizeof(clientaddr);
 
     Signal(SIGINT, handler);
-
-    //Gestion du pool de serveurs esclaves
-    int portS[NB_SLAVES], listenfdS[NB_SLAVES];
-    socklen_t clientlenS[NB_SLAVES];
-    struct sockaddr_in clientaddrS[NB_SLAVES];
-
-    for (int i = 0; i < NB_SLAVES; i++) {
-        portS[i] = port + i + 1; // ports 2122 à 2126 pour les esclaves
-        listenfdS[i] = Open_listenfd(portS[i]);
-        clientlenS[i] = (socklen_t)sizeof(clientaddrS);
-    }
     
     int tourniquet = 0; // pour faire du round-robin entre les esclaves
 
-
-    printf("Démarrage du pool de %d processus sur le port %d...\n", NPROC, port);
+    printf("Démarrage du pool de %d processus sur le port %d...\n", NPROC, MASTER_PORT);
 
     for (int i = 0; i < NPROC; i++) {
         if ((pid = Fork()) == 0) { //Fils
@@ -118,29 +86,22 @@ int main(int argc, char **argv)
                 // sockaddr = SA
                 int connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen);
 
+                // choisir un esclave
+                int chosen = tourniquet;
+                tourniquet = (tourniquet + 1) % NB_SLAVES;
+
                 response_t resp;
+                memset(&resp, 0, sizeof(response_t));
                 resp.type = PORT;
-                resp.status = portS[tourniquet]; // port pour le server esclave
+                resp.status = slave_ports[chosen];
+                strncpy(resp.data, slave_ips[chosen], MAXCHAR);
 
                 hton_resp(&resp);
                 Rio_writen(connfd, &resp, sizeof(response_t));
-                Close(connfd); // on ferme la connexion avec le client après lui avoir envoyé le port de l'esclave
+                Close(connfd); // fin de la phase maitre pour le client
 
-                connfd = Accept(listenfdS[tourniquet], (SA *)&clientaddr, &clientlenS[tourniquet]); // on accepte la connexion du client sur le port de l'esclave
-                tourniquet = (tourniquet + 1) % NB_SLAVES;
-                
-                // Affichage du port pour l'expérimentation
-                printf("[Fils %d] Requête reçue sur le port local %d\n", getpid(), ntohs(clientaddr.sin_port));
-            
-                int status = apply_request(connfd);
-                Close(connfd);
-
-                if (status == 1) { // si le client a envoyé une requête BYE, on ferme la connexion
-                    printf("[Fils %d] Client déconnecté, remise en attente.\n", getpid());
-                    continue; // on retourne à l'attente de nouvelles connexions
-                } else {
-                    printf("[Fils %d] Travail terminé, remise en attente.\n", getpid());
-                }
+                printf("[Fils %d] Client redirigé vers esclave %d (%s:%d)\n",
+                       getpid(), chosen, slave_ips[chosen], slave_ports[chosen]);
             }
         } else { //Pere
             pool[i] = pid;

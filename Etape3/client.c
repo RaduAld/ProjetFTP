@@ -57,15 +57,32 @@ int main(int argc, char **argv)
      * If necessary, Open_clientfd will perform the name resolution
      * to obtain the IP address.
      */
+
+    // 1. le client se connect au serveur maitre
+    // 2. le maitre repond avec un message port
+    // 3. le client ferme la connexion avec la maitre et se connect a l'esclave indique
+    // 4. client envoie ses requets a l'esclave
+
     response_t resp;
     clientfd = Open_clientfd(host, port);
     Rio_readn(clientfd, &resp, sizeof(response_t)); // read welcome message from server
     ntoh_resp(&resp);
+    
     if (resp.type == PORT) {
-        int slavePort = resp.status; // port du serveur esclave à utiliser pour les requêtes suivantes
-        Close(clientfd); // on ferme la connexion avec le serveur principal
-        clientfd = Open_clientfd(host, slavePort); // on se connecte au serveur esclave
-        printf("Connected to slave server on port %d\n", slavePort);
+        int slave_port = resp.status; // port du serveur esclave à utiliser pour les requêtes suivantes
+        char slave_host[MAXLINE];
+        strncpy(slave_host, resp.data, MAXLINE);
+
+        Close(clientfd); // on ferme la connexion avec le serveur maitre
+
+        if (slave_host[0] == '\0') {
+            fprintf(stderr, "Error: Empty IP address received from master server.\n");
+            // on met l'ip du maitre
+            strncpy(slave_host, host, MAXCHAR);
+        }
+
+        clientfd = Open_clientfd(slave_host, slave_port); // on se connecte au serveur esclave
+        printf("Connected to slave server on %s:%d\n", slave_host, slave_port);
     } else {
         fprintf(stderr, "Unexpected response from server. Expected PORT message.\n");
         Close(clientfd);
@@ -79,7 +96,7 @@ int main(int argc, char **argv)
      */
     printf("client connected to server OS\n"); 
 
-    //Send request to server
+    // Send request to server
     request_t req;
 
     while (Fgets(buf, MAXLINE, stdin) != NULL) {
@@ -139,7 +156,7 @@ int main(int argc, char **argv)
                     fprintf(stdout, "Serveur a fermé la connexion\n");
                     break;
                 }
-                Sleep(2);
+                Sleep(1);
                 ntoh_resp(&resp);
                 handle_response(&resp, &req, false); // on ecrit dans le même fichier, en concaténant les données
             }

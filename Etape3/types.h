@@ -14,14 +14,15 @@ typedef enum typereq_t {
 typedef struct request_t {
     typereq_t type;
     char filename[MAXLINE];
-    uint32_t offset; // offset pour continuer un transfert de fichier à partir d'une certaine position (pour les GET et PUT)
+    // offset pour continuer un transfert de fichier à partir d'une certaine position (pour les GET et PUT)
+    uint32_t offset; 
 } request_t;
 
 typedef struct response_t {
     typereq_t type;
     int status; // 0 for success, -1 for error
     bool endOfFile; // true if this is the last block of the file
-    char data[MAXCHAR];
+    char data[MAXCHAR]; // pour PORT: adresse IP de l'esclave
     ssize_t dataSize;
 } response_t;
 
