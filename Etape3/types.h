@@ -7,6 +7,7 @@ typedef enum typereq_t {
     GET,
     PUT,
     LS,
+    PORT,
     BYE
 } typereq_t;
 

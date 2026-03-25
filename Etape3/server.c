@@ -2,14 +2,15 @@
 #include "types.h"
 
 #define NPROC 5
+#define NB_SLAVES 5
+#define MASTER_PORT 2121
+#define SLAVE_REG_PORT 2120 //pour l'enregistrement des esclaves
 
 void handler(int sig);
 
 pid_t pool[NPROC];
 
-
-int apply_request(int connfd)
-{
+int apply_request(int connfd){
     size_t n;
     request_t req;
     response_t resp;
@@ -95,6 +96,20 @@ int main(int argc, char **argv)
 
     Signal(SIGINT, handler);
 
+    //Gestion du pool de serveurs esclaves
+    int portS[NB_SLAVES], listenfdS[NB_SLAVES];
+    socklen_t clientlenS[NB_SLAVES];
+    struct sockaddr_in clientaddrS[NB_SLAVES];
+
+    for (int i = 0; i < NB_SLAVES; i++) {
+        portS[i] = port + i + 1; // ports 2122 à 2126 pour les esclaves
+        listenfdS[i] = Open_listenfd(portS[i]);
+        clientlenS[i] = (socklen_t)sizeof(clientaddrS);
+    }
+    
+    int tourniquet = 0; // pour faire du round-robin entre les esclaves
+
+
     printf("Démarrage du pool de %d processus sur le port %d...\n", NPROC, port);
 
     for (int i = 0; i < NPROC; i++) {
@@ -102,10 +117,21 @@ int main(int argc, char **argv)
             while (1) {
                 // sockaddr = SA
                 int connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen);
+
+                response_t resp;
+                resp.type = PORT;
+                resp.status = portS[tourniquet]; // port pour le server esclave
+
+                hton_resp(&resp);
+                Rio_writen(connfd, &resp, sizeof(response_t));
+                Close(connfd); // on ferme la connexion avec le client après lui avoir envoyé le port de l'esclave
+
+                connfd = Accept(listenfdS[tourniquet], (SA *)&clientaddr, &clientlenS[tourniquet]); // on accepte la connexion du client sur le port de l'esclave
+                tourniquet = (tourniquet + 1) % NB_SLAVES;
                 
                 // Affichage du port pour l'expérimentation
                 printf("[Fils %d] Requête reçue sur le port local %d\n", getpid(), ntohs(clientaddr.sin_port));
-                
+            
                 int status = apply_request(connfd);
                 Close(connfd);
 

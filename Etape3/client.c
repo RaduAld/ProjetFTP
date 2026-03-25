@@ -57,7 +57,20 @@ int main(int argc, char **argv)
      * If necessary, Open_clientfd will perform the name resolution
      * to obtain the IP address.
      */
+    response_t resp;
     clientfd = Open_clientfd(host, port);
+    Rio_readn(clientfd, &resp, sizeof(response_t)); // read welcome message from server
+    ntoh_resp(&resp);
+    if (resp.type == PORT) {
+        int slavePort = resp.status; // port du serveur esclave à utiliser pour les requêtes suivantes
+        Close(clientfd); // on ferme la connexion avec le serveur principal
+        clientfd = Open_clientfd(host, slavePort); // on se connecte au serveur esclave
+        printf("Connected to slave server on port %d\n", slavePort);
+    } else {
+        fprintf(stderr, "Unexpected response from server. Expected PORT message.\n");
+        Close(clientfd);
+        exit(1);
+    }
     
     /*
      * At this stage, the connection is established between the client
