@@ -13,6 +13,7 @@ typedef enum typereq_t {
 typedef struct request_t {
     typereq_t type;
     char filename[MAXLINE];
+    uint32_t offset; // offset pour continuer un transfert de fichier à partir d'une certaine position (pour les GET et PUT)
 } request_t;
 
 typedef struct response_t {
@@ -25,10 +26,12 @@ typedef struct response_t {
 
 void ntoh_req(request_t *req) {
     req->type = ntohs(req->type);
+    req->offset = ntohl(req->offset);
 }
 
 void hton_req(request_t *req) {
     req->type = htons(req->type);
+    req->offset = htonl(req->offset);
 }
 
 void ntoh_resp(response_t *resp) {

@@ -6,21 +6,23 @@
 
 
 
-void handle_response(response_t *resp, char *filename, bool isFirst) {
+void handle_response(response_t *resp, request_t *req, bool isFirst) {
     switch(resp->type){
         case GET:
             int fd;
             if (resp->status == 0) {
                 //printf("Response from server: %.*s\n", (int)resp->dataSize, resp->data);
                 char path[MAXNAME] = "./repClient/";
-                strcat(path, filename);
+                strcat(path, req->filename);
                 if (isFirst) {
                     fd = Open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
                 } else {
                     fd = Open(path, O_WRONLY | O_APPEND, 0644);
                 }
                 // Ecriture des données dans le fichier
+                lseek(fd, 0, SEEK_END);
                 Rio_writen(fd, resp->data, resp->dataSize);
+                req->offset += resp->dataSize; // on met à jour l'offset pour le prochain bloc de données
                 Close(fd);
             } else {
                 fprintf(stderr, "%s\n", resp->data);
@@ -71,6 +73,31 @@ int main(int argc, char **argv)
 
         if (strcmp(strtok(buf, " "), "get") == 0) {
             req.type = GET;
+            strncpy(req.filename, strtok(NULL, " \n"), MAXNAME);
+            hton_req(&req);
+            // Check file offset du fichier
+
+            char cmd[MAXLINE] = "cat repClient/";
+            strcat(cmd, req.filename);
+            strcat(cmd, " | wc -c > repClient/temp.txt");
+            int status = system(cmd);
+            if (status == 0) {
+                int tempfd = Open("repClient/temp.txt", O_RDONLY | O_CREAT, 777);
+                char maxOffsetStr[MAXLINE];
+                Rio_readn(tempfd, &maxOffsetStr, sizeof(maxOffsetStr)); 
+                req.offset = (uint32_t)strtoul(maxOffsetStr, NULL, 10);
+                Close(tempfd);
+                system("rm repClient/temp.txt");
+            } else {
+                printf("File does not exist or error occurred while checking offset.\n");
+                req.offset = 0; // si le fichier n'existe pas encore, on commence à transférer depuis le début
+            }
+
+            printf("Sending GET request to server for file '%s' with offset %u\n", req.filename, req.offset);
+
+            req.offset = htonl(req.offset); // on convertit l'offset en format réseau
+
+            Rio_writen(clientfd, &req, sizeof(request_t));
         } else if (strcmp(strtok(buf, " "), "put") == 0) {
             req.type = PUT;
         } else if (strcmp(strtok(buf, " "), "ls") == 0) {
@@ -83,17 +110,17 @@ int main(int argc, char **argv)
             fprintf(stderr, "Invalid command. Use 'get', 'put', 'ls' or 'bye'.\n");
             continue;
         }
-        strncpy(req.filename, strtok(NULL, " \n"), MAXNAME);
-
-        hton_req(&req);
-        Rio_writen(clientfd, &req, sizeof(request_t));
 
         //Receive response from server
         response_t resp;
 
         if (Rio_readn(clientfd, &resp, sizeof(response_t)) > 0) {
             ntoh_resp(&resp);
-            handle_response(&resp, req.filename, true);
+            if (req.offset == 0) {
+                handle_response(&resp, &req, true);
+            } else {
+                handle_response(&resp, &req, false);
+            }
             while (!resp.endOfFile) {
                 if (Rio_readn(clientfd, &resp, sizeof(response_t)) <= 0) {
                     fprintf(stdout, "Serveur a fermé la connexion\n");
@@ -101,8 +128,9 @@ int main(int argc, char **argv)
                 }
                 Sleep(2);
                 ntoh_resp(&resp);
-                handle_response(&resp, req.filename, false); // on ecrit dans le même fichier, en concaténant les données
+                handle_response(&resp, &req, false); // on ecrit dans le même fichier, en concaténant les données
             }
+            req.offset = 0;
             fprintf(stdout, "End of file received\n");
             //break;
         } else { /* the server has prematurely closed the connection */

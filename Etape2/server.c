@@ -26,9 +26,10 @@ int apply_request(int connfd)
                 write(STDOUT_FILENO, "Opened file descriptor:\n", 24);
                 char filebuf[MAXCHAR];
 
+                lseek(fd, req.offset, SEEK_SET); // on se positionne à l'offset spécifié dans la requête
                 // Transfert du fichier par blocs de MAXCHAR octets
+                resp.dataSize = Rio_readn(fd, filebuf, MAXCHAR);
                 do {
-                    resp.dataSize = Rio_readn(fd, filebuf, MAXCHAR);
                     if (resp.dataSize >= 0) {
                         resp.status = 0; // success
                         resp.endOfFile = false;
