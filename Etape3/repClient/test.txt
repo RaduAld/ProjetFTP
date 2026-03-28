@@ -32,4 +32,21 @@ requêtes client vers le serveur. Cette structure doit avoir au moins deux champ
 — un champ entier qui correspond au type de la requête.
 — un champ qui correspond à un nom de fichier.
 Question 3 Squelette de code adapté.Reprendre le code de l’exemple client- serveur
-echo
+echo et définir le squelette du code pour le client-serveur FTP.
+— Renommage de fichiers. Vous devez veiller à renommer vos fichiers en consé-
+quence.Typiquement,lefichierdevotreserveurnedoitpass’appelerechoserveri.c
+puisqu’il ne concerne pas echo et n’est pas itératif.
+— Pool de processus. Vous devez avoir une version de serveur concurrent avec un
+pool de processus. Le nombre de processus dans votre pool de processus doit être
+configuré à l’aide d’une constante NB_PROC et non écrit en dur dans le code.
+— Port d’écoute du serveur 2121. Le serveur de fichiers va écouter sur le port
+prédéfini 2121. Vous n’avez donc pas besoin de le passer en paramètre lors du
+lancement du serveur et des clients.
+Question 4 Terminaison propre du serveur. Le serveur doit pouvoir être arrêté
+proprement. cet arrêt doit se charger du nettoyage de tous les processus exécutants du
+pool de processus. Pour se faire, le serveur retransmettra le signal SIGINT à chacun de ses
+fils via la programmation d’un traitant de signal approprié.
+Question 5 Dossiers de travail pour le client et le serveur Le serveur sert les
+fichiers depuis un répertoire local à la machine sur laquelle il s’exécute. Le client, de son
+côté, sauvegarde les fichiers reçus dans un répertoire local sur la machine sur laquelle il
+s’exécute.Définirdeuxrépertoirespardéfautàutiliserparleclie
