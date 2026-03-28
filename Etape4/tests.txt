@@ -1,0 +1,547 @@
+===============================================================================
+  SERVEUR FTP — GUIDE DE TESTS MANUEL
+  Toutes les commandes s'exécutent depuis la racine du projet
+  (là où se trouvent les binaires server, client, esclave).
+  Commencer par `make` avant tout test.
+===============================================================================
+
+
+-------------------------------------------------------------------------------
+MISE EN PLACE — à faire une seule fois avant tous les tests
+-------------------------------------------------------------------------------
+
+Compiler le projet :
+
+    make
+
+Créer les répertoires de travail du serveur et du client :
+
+    mkdir -p repServeur repClient
+
+Peupler le serveur avec des fichiers de test :
+
+    echo "Bonjour FTP !" > repServeur/hello.txt
+    python3 -c "open('repServeur/large.txt', 'w').write('A' * 350 + '\n')"
+
+Créer un fichier local à utiliser pour les tests PUT :
+
+    echo "contenu local" > repClient/upload.txt
+
+
+-------------------------------------------------------------------------------
+DÉMARRAGE DU SERVEUR — garder ce terminal ouvert pendant tous les tests
+-------------------------------------------------------------------------------
+
+Le maître lance automatiquement les processus esclaves. Exécuter :
+
+    ./server
+
+Sortie attendue (l'ordre d'enregistrement des esclaves peut varier) :
+
+    Maître : en attente de 2 esclave(s) sur le port 2120...
+    [Esclave] Port d'écoute ouvert sur 2122
+    [Esclave] Port d'écoute ouvert sur 2123
+    Maître : esclave 0 enregistré — localhost:2122
+    Maître : esclave 1 enregistré — localhost:2123
+    Maître : tous les esclaves sont enregistrés. Prêt à accepter des clients.
+    Démarrage du pool de 5 processus sur le port 2121...
+
+
+===============================================================================
+ETAPE I & II — SERVEUR FTP DE BASE
+===============================================================================
+
+
+--- Q1 à Q3 : Connexion de base et requête GET (petit fichier) ---
+
+Le client se connecte au serveur et demande un fichier. Vérifier que la
+connexion s'établit et que le fichier est bien reçu.
+
+    rm -f repClient/hello.txt
+    ./client localhost 2121
+
+Taper :
+    get hello.txt
+    bye
+
+Sortie attendue :
+    Sending GET request to server for file 'hello.txt' with offset 0
+    End of file received
+
+Vérifier que le contenu correspond au fichier serveur :
+
+    diff repServeur/hello.txt repClient/hello.txt
+
+Résultat attendu : aucune sortie (fichiers identiques).
+
+
+--- Q4 : Arrêt propre du serveur ---
+
+Appuyer sur Ctrl+C dans le terminal du serveur.
+
+Résultat attendu dans le terminal du serveur :
+    Arrêt du serveur. Fermeture des processus fils...
+
+Vérifier qu'aucun processus esclave ne reste actif :
+
+    ps aux | grep esclave
+
+Résultat attendu : aucun processus esclave listé.
+Redémarrer le serveur avant de continuer :
+
+    ./server
+
+
+--- Q5 : Répertoires de travail distincts ---
+
+Vérifier que le serveur lit depuis repServeur/ et que le client écrit dans
+repClient/, même en s'exécutant sur la même machine.
+
+    rm -f repClient/hello.txt
+    ./client localhost 2121
+
+Taper :
+    get hello.txt
+    bye
+
+Vérifier :
+
+    ls repClient/hello.txt
+
+Résultat attendu : le fichier existe dans repClient/ et non à la racine.
+
+
+--- Q6 & Q7 : GET d'un fichier inexistant ---
+
+Le serveur doit renvoyer une erreur sans planter. Le client doit afficher
+un message d'erreur explicite.
+
+    ./client localhost 2121
+
+Taper :
+    get fichier_inexistant.txt
+    bye
+
+Résultat attendu : un message d'erreur tel que :
+    Erreur: le fichier n'existe pas
+
+
+--- Q8 : Transfert par blocs (grand fichier) ---
+
+large.txt fait 351 octets, soit plus que MAXCHAR (100). Le serveur doit
+l'envoyer en plusieurs blocs. Vérifier que le réassemblage côté client
+est correct.
+
+    rm -f repClient/large.txt
+    ./client localhost 2121
+
+Taper :
+    get large.txt
+    bye
+
+Vérifier la taille et le contenu :
+
+    diff repServeur/large.txt repClient/large.txt
+
+Résultat attendu : aucune sortie (fichiers identiques).
+
+
+--- Q9 : Plusieurs requêtes par connexion ---
+
+Le client doit pouvoir enchaîner plusieurs commandes sans se reconnecter.
+
+    rm -f repClient/hello.txt repClient/large.txt
+    ./client localhost 2121
+
+Taper :
+    get hello.txt
+    get large.txt
+    bye
+
+Résultat attendu : les deux fichiers sont reçus et écrits dans repClient/.
+
+    diff repServeur/hello.txt repClient/hello.txt
+    diff repServeur/large.txt repClient/large.txt
+
+
+--- Q10 : Reprise de transfert après interruption (gestion de panne client) ---
+
+Interrompre le client pendant un GET et vérifier que le relancement reprend
+là où le transfert s'est arrêté (seule la partie manquante est retéléchargée).
+
+Etape 1 — lancer le transfert et l'interrompre immédiatement :
+
+    ./client localhost 2121
+
+Taper :
+    get large.txt
+
+Appuyer sur Ctrl+C avant la fin du transfert.
+
+Etape 2 — relancer le client et refaire la même demande :
+
+    ./client localhost 2121
+
+Taper :
+    get large.txt
+    bye
+
+Vérifier que le fichier est complet et correct :
+
+    diff repServeur/large.txt repClient/large.txt
+
+Résultat attendu : aucune sortie. Le client a repris à l'offset enregistré
+lors du premier transfert.
+
+
+===============================================================================
+ETAPE III — RÉPARTITION DE CHARGE
+===============================================================================
+
+
+--- Q11 & Q12 : Enregistrement des esclaves auprès du maître ---
+
+Vérifier que le maître attend bien NB_SLAVES=2 esclaves avant d'accepter
+des clients. Cette vérification se fait à l'œil nu au démarrage du serveur.
+
+Redémarrer le serveur :
+
+    ./server
+
+Résultat attendu : le maître affiche les deux esclaves enregistrés sur les
+ports 2122 et 2123 avant d'afficher "Prêt à accepter des clients".
+
+
+--- Q13 : Redirection du client vers un esclave (tourniquet) ---
+
+Le client se connecte au maître (port 2121), reçoit l'adresse d'un esclave,
+ferme la connexion avec le maître, puis se reconnecte directement à l'esclave.
+
+    ./client localhost 2121
+
+Taper :
+    bye
+
+Sortie attendue :
+    Connected to slave server on localhost:2122   (ou 2123)
+    client connected to server OS
+
+Vérifier le tourniquet en ouvrant deux terminaux simultanément :
+
+Terminal A :
+    ./client localhost 2121
+    (taper) bye
+
+Terminal B (lancer juste après A) :
+    ./client localhost 2121
+    (taper) bye
+
+Résultat attendu : terminal A atterrit sur le port 2122, terminal B sur 2123
+(ou l'inverse). Le terminal serveur affiche :
+    [FilsXXX] Client redirigé vers esclave 0 (localhost:2122)
+    [FilsXXX] Client redirigé vers esclave 1 (localhost:2123)
+
+
+===============================================================================
+ETAPE IV — OPÉRATIONS AVANCÉES
+===============================================================================
+
+
+--- Q15 : Commande ls ---
+
+L'esclave exécute `ls ./repServeur/` et renvoie le résultat ligne par ligne.
+
+    ./client localhost 2121
+
+Taper :
+    ls
+    bye
+
+Résultat attendu : hello.txt et large.txt apparaissent dans la liste.
+
+Vérifier que ls se met à jour dynamiquement. Dans un autre terminal :
+
+    echo "nouveau" > repServeur/nouveau.txt
+
+Puis dans le client :
+
+    ./client localhost 2121
+
+Taper :
+    ls
+    bye
+
+Résultat attendu : nouveau.txt apparaît dans la liste.
+Nettoyage :
+
+    rm repServeur/nouveau.txt
+
+
+--- Q16 : Commande put ---
+
+Téléverser un fichier local vers le serveur. Nécessite d'être authentifié
+(voir Q17). La modification doit être propagée à tous les esclaves.
+
+    rm -f repServeur/upload.txt
+    ./client localhost 2121
+
+Taper :
+    login admin 1234
+    put upload.txt
+    bye
+
+Résultat attendu :
+    Authentification réussie
+    Fichier téléversé avec succès
+
+Vérifier que le fichier est présent sur le serveur et que son contenu
+correspond :
+
+    diff repClient/upload.txt repServeur/upload.txt
+
+Vérifier la propagation aux autres esclaves (attendre 1 seconde) :
+
+    sleep 1
+
+Premier client (atteint l'esclave 0) :
+
+    ./client localhost 2121
+
+Taper :
+    get upload.txt
+    bye
+
+Deuxième client (atteint l'esclave 1) :
+
+    rm -f repClient/upload.txt
+    ./client localhost 2121
+
+Taper :
+    get upload.txt
+    bye
+
+Résultat attendu : les deux téléchargements réussissent. Le fichier obtenu
+correspond au fichier d'origine :
+
+    diff repClient/upload.txt repServeur/upload.txt
+
+
+--- Q16 : Commande rm ---
+
+Supprimer un fichier sur le serveur. Nécessite d'être authentifié.
+La suppression doit être propagée à tous les esclaves.
+
+    ./client localhost 2121
+
+Taper :
+    login admin 1234
+    rm upload.txt
+    bye
+
+Résultat attendu :
+    Fichier supprimé avec succès
+
+Vérifier que le fichier n'existe plus sur le serveur :
+
+    ls repServeur/upload.txt
+
+Résultat attendu :
+    ls: cannot access 'repServeur/upload.txt': No such file or directory
+
+Vérifier que le fichier n'apparaît plus dans ls :
+
+    ./client localhost 2121
+
+Taper :
+    ls
+    bye
+
+Résultat attendu : upload.txt absent de la liste.
+
+Vérifier la propagation (attendre 1 seconde) :
+
+    sleep 1
+
+Premier client :
+    ./client localhost 2121
+
+Taper :
+    get upload.txt
+    bye
+
+Deuxième client :
+    ./client localhost 2121
+
+Taper :
+    get upload.txt
+    bye
+
+Résultat attendu : les deux retournent une erreur du type :
+    Erreur: le fichier n'existe pas
+
+Vérifier qu'une tentative de suppression d'un fichier inexistant retourne
+une erreur :
+
+    ./client localhost 2121
+
+Taper :
+    login admin 1234
+    rm fichier_inexistant.txt
+    bye
+
+Résultat attendu :
+    Erreur: fichier introuvable ou suppression impossible
+
+
+--- Q17 : Authentification ---
+
+Les commandes put et rm doivent être refusées sans authentification préalable.
+Les identifiants valides sont définis dans esclave.c : admin/1234, alice/passA,
+radu/passR.
+
+Test 1 — put sans login :
+
+    ./client localhost 2121
+
+Taper :
+    put upload.txt
+    bye
+
+Résultat attendu :
+    Erreur: authentification requise
+
+Test 2 — rm sans login :
+
+    ./client localhost 2121
+
+Taper :
+    rm hello.txt
+    bye
+
+Résultat attendu :
+    Erreur: authentification requise
+
+Vérifier que hello.txt n'a pas été supprimé :
+
+    ls repServeur/hello.txt
+
+Test 3 — mauvais mot de passe :
+
+    ./client localhost 2121
+
+Taper :
+    login admin mauvais_mdp
+    bye
+
+Résultat attendu :
+    Erreur: login ou mot de passe incorrect
+
+Test 4 — authentification réussie (admin) :
+
+    ./client localhost 2121
+
+Taper :
+    login admin 1234
+    bye
+
+Résultat attendu :
+    Authentification réussie
+
+Test 5 — authentification réussie (second utilisateur) :
+
+    ./client localhost 2121
+
+Taper :
+    login alice passA
+    bye
+
+Résultat attendu :
+    Authentification réussie
+
+Test 6 — état d'authentification limité à la connexion courante :
+
+Première connexion (login réussi) :
+
+    ./client localhost 2121
+
+Taper :
+    login admin 1234
+    bye
+
+Deuxième connexion (sans login) :
+
+    ./client localhost 2121
+
+Taper :
+    put upload.txt
+    bye
+
+Résultat attendu sur la deuxième connexion :
+    Erreur: authentification requise
+
+
+===============================================================================
+TESTS DE ROBUSTESSE
+===============================================================================
+
+
+--- Survie de l'esclave après déconnexion abrupte d'un client ---
+
+Interrompre le client avec Ctrl+C pendant un transfert GET. L'esclave doit
+rester actif et continuer à servir les clients suivants.
+
+    ./client localhost 2121
+
+Taper :
+    get large.txt
+
+Appuyer immédiatement sur Ctrl+C avant la fin du transfert.
+
+Ouvrir une nouvelle session client :
+
+    ./client localhost 2121
+
+Taper :
+    ls
+    bye
+
+Résultat attendu : ls fonctionne normalement — l'esclave n'a pas planté.
+
+
+--- Clients séquentiels multiples ---
+
+Trois clients enchaînés, chacun effectuant un ls. Vérifie que le serveur
+reste stable sur la durée.
+
+    ./client localhost 2121
+Taper : ls puis bye
+
+    ./client localhost 2121
+Taper : ls puis bye
+
+    ./client localhost 2121
+Taper : ls puis bye
+
+Résultat attendu : les trois sessions retournent un listing valide.
+
+
+--- Commande invalide ---
+
+    ./client localhost 2121
+
+Taper :
+    commandeinvalide
+    bye
+
+Résultat attendu :
+    Invalid command. Use 'get', 'put', 'ls', 'rm', 'login' or 'bye'.
+
+
+-------------------------------------------------------------------------------
+NETTOYAGE FINAL
+-------------------------------------------------------------------------------
+
+Arrêter le serveur avec Ctrl+C dans son terminal, puis nettoyer :
+
+    make clean
+    rm -rf repServeur repClient

@@ -3,15 +3,6 @@
 
 // Serveur esclave
 // Usage : ./esclave <master_host> <master_reg_port> <my_port>
-//
-// A demarer AVANT le client, mais APRES que le maître a ouvert son port
-// d'enregistrement (SLAVE_REG_PORT).  L'esclave :
-//   1. ouvre son propre port d'ecoute (my_port).
-//   2. s'enregistre auprès du maître en lui envoyant un message PORT
-//      contenant son port et son adresse IP.
-//   3. attend l'accusé de réception du maître.
-//   4. entre dans sa boucle principale et traite les requêtes des clients
-//      (GET, PUT, LS, BYE) exactement comme dans les étapes précédentes.
 
 // returns:
 //      0 - connexion terminee normalement (client a ferme la connexion)
