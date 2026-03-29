@@ -1,0 +1,2 @@
+Bonjour FTP !
+Ce fichier est utilisé pour tester le transfert de petits fichiers (GET de base).

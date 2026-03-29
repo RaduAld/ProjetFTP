@@ -161,4 +161,35 @@ Page 4
 garder les informations pertinentes (lesquelles?) qui seront nécessaires à la connexion d’un
 client avec ce serveur esclave.
 Question13Adaptationdelaphasedeconnexiond’unclient.Leprotocoleinitial
-d’échange entre client et serveur doit être adapté. En eﬀet, apr�
+d’échange entre client et serveur doit être adapté. En eﬀet, après connexion d’un client au
+serveur maître, il doit recevoir les informations de connexion pour pouvoir se connecter à
+un serveur esclave. Après réception de ces informations, il se connecté à un serveur esclave,
+et suivra le protocole d’échange des versions précédentes.
+Question 14 Bonus : reconnexion en cas de panne de serveur esclave. Proposer
+unesolution(unprotocoled’échanges)afindemettreenplaceuneredirectiondeclientvers
+un serveur esclave fonctionnel en cas de panne du serveur esclave auquel il est connecté.
+4 Etape IV : Opérations avancées
+ATTENTION : ne pas traiter cette étape si l’étape précédente n’est pas faite.
+Si cette consigne n’est pas respectée, cela se traduira par un malus.
+Question 15 Commandes ls
+Modifier la version précédente afin d’enrichir votre serveur FTP avec la commande ls
+qui retourne le contenu du répertoire courant du serveur FTP. Vous pouvez implémenter
+cette partie en utilisant les principes de création de fils (fork), exécution de programme
+(exec) et redirection d’E/S (dup2). Vous pouvez également regarder et utiliser la fonction
+popen.
+Question 16 Commandes rm et put
+Enrichir le serveur FTP avec les commandes suivantes :
+— rm : permet de supprimer un fichier sur le serveur FTP,
+— put : permet de téléverser un fichier sur le serveur FTP.
+Si un client eﬀectue ce genre de requêtes, le serveur auquel le client est connecté doit
+répercuter ces modifications sur tous les autres serveurs esclaves (chaque système de fichier
+doit être mis à jour au bout d’un temps fini). On ne demande pas de cohérence forte ici
+(si un client se reconnecte, il n’a pas la garantie de voir ces modifications immédiatement
+prises en compte).
+Question 17 Authentification
+Les commandes implémentées dans l’étape précédente modifient les fichiers auxquels
+un serveur FTP donne accès et sont donc dangereuses. Pour protéger le serveur contre
+leur utilisation malveillante, mettre en place un système d’authentification où seulement
+certains utilisateurs (login :mot de passe) pourront les utiliser. Une tentative d’utilisation
+de ces commandes sans authentification préalable devrait échouer.
+Page 5

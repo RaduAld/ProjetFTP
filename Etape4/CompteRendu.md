@@ -6,7 +6,7 @@
 ## 1. Présentation générale
 
 Ce projet consiste à implémenter un serveur de fichiers inspiré du protocole FTP,
-en C, en utilisant les primitives POSIX de gestion de processus et de communication
+en C, en utilisant les primitives de gestion de processus et de communication
 réseau fournies par la bibliothèque `csapp`. Le projet est divisé en quatre étapes
 progressives, de la version mono-client basique jusqu'à un système distribué avec
 répartition de charge, opérations avancées et authentification.
@@ -24,7 +24,10 @@ Le système final est composé de trois types de processus distincts :
 
 - **Les serveurs esclaves** (`esclave.c`) : processus qui traitent effectivement
   les requêtes FTP des clients (GET, PUT, LS, RM). Ils sont lancés automatiquement
-  par le maître via `fork` + `execv` au démarrage.
+  par le maître via `fork` + `execv` au démarrage. Chaque esclave reçoit un index
+  du maître et dispose de son propre répertoire de travail (`repServeur0/`,
+  `repServeur1/`, etc.), initialisé au démarrage depuis le répertoire de référence
+  `repServeur/`.
 
 - **Le client** (`client.c`) : se connecte d'abord au maître pour obtenir
   l'adresse d'un esclave, puis dialogue directement avec cet esclave pour toutes
@@ -116,19 +119,21 @@ exclusivement entre le client et l'esclave, sans passer par le maître.
 
 **Commande ls (Q15)**
 
-L'esclave exécute `popen("ls ./repServeur/", "r")` et envoie le résultat au client
-ligne par ligne sous forme de blocs `response_t` avec `endOfFile = false`, puis un
-bloc final vide avec `endOfFile = true`. Le client affiche chaque ligne reçue sur
-la sortie standard.
+L'esclave construit dynamiquement la commande `ls <my_repdir>` avec `snprintf` et
+l'exécute via `popen`. Le résultat est envoyé au client ligne par ligne sous forme
+de blocs `response_t` avec `endOfFile = false`, puis un bloc final vide avec
+`endOfFile = true`. Le client affiche chaque ligne reçue sur la sortie standard.
 
 **Commandes put et rm avec propagation (Q16)**
 
 - `put` : le client envoie la requête puis le contenu du fichier bloc par bloc
   (chaque bloc est un `response_t` avec `endOfFile` à `true` sur le dernier).
-  L'esclave écrit le fichier dans `repServeur/`, puis propage l'opération à tous
-  les autres esclaves via une requête `SYNC` en connexion directe pair-à-pair.
+  L'esclave écrit le fichier dans son répertoire propre (`repServeurN/`), puis
+  propage l'opération à tous les autres esclaves via une requête `SYNC` en
+  connexion directe pair-à-pair.
 
-- `rm` : l'esclave supprime le fichier avec `unlink()` puis propage via `SYNC`.
+- `rm` : l'esclave supprime le fichier avec `unlink()` dans son répertoire propre,
+  puis propage via `SYNC`.
 
 La propagation est **best-effort** : l'esclave ouvre une connexion vers chaque pair
 et envoie la requête `SYNC` contenant le type d'opération (encodé dans `offset`)
@@ -152,60 +157,76 @@ est strictement **par connexion** : il n'est pas partagé entre sessions.
 ## 4. Interconnexion des entités
 
 ```
-┌─────────────────────────────────────────┐
-│            DÉMARRAGE                    │
-│                                         │
-│  ./server                               │
-│    ├─ fork+execv ──► ./esclave ... 2122 │
-│    └─ fork+execv ──► ./esclave ... 2123 │
-│                                         │
-│  Esclaves s'enregistrent sur port 2120  │
-│  Maître envoie slave_list_t à chacun    │
-└─────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│  DÉMARRAGE : ./server                                │
+│                                                      │
+│  Ouvre SLAVE_REG_PORT (2120)                         │
+│    ├─ fork+execv ──► ./esclave localhost 2120 2122 0 │
+│    ├─ fork+execv ──► ./esclave localhost 2120 2123 1 │
+│    └─ ...                                            │
+│                                                      │
+│  Chaque esclave :                                    │
+│    1. crée repServeurN/                              │
+│    2. cp -rf repServeur/ → repServeurN/              │
+│    3. s'enregistre sur SLAVE_REG_PORT                │
+│                                                      │
+│  Maître envoie slave_list_t à chacun                 │
+└──────────────────────────────────────────────────────┘
 
-Client                     Maître (port 2121)         Esclave (port 2122 ou 2123)
-  │                               │                             │
-  │── connexion TCP ─────────────►│                             │
-  │◄─ message PORT (ip:port) ─────│                             │
-  │── fermeture connexion ────────►│                             │
-  │                                                             │
-  │── connexion TCP ────────────────────────────────────────────►│
-  │── requête GET/PUT/LS/RM/LOGIN ──────────────────────────────►│
-  │◄─ réponse(s) ───────────────────────────────────────────────│
-  │── requête BYE ──────────────────────────────────────────────►│
-  │── fermeture connexion ──────────────────────────────────────►│
+Client                   Maître (2121)        Esclave N (2122+N)
+  │                           │                      │
+  │─ connexion TCP ──────────►│                      │
+  │◄─ PORT (ip:port esclave) ─│                      │
+  │─ fermeture ──────────────►│                      │
+  │                                                  │
+  │─ connexion TCP ──────────────────────────────── ►│
+  │─ GET / PUT / LS / RM / LOGIN ───────────────────►│
+  │◄─ réponse(s) ────────────────────────────────────│
+  │─ BYE ───────────────────────────────────────────►│
 
-Propagation PUT/RM :
-  Esclave 1 ──── SYNC ────────────────────────────────────────►Esclave 2
+Propagation PUT/RM (pair-à-pair, best-effort) :
+  repServeur0/fichier ──── SYNC ────► repServeur1/fichier
+                      └─── SYNC ────► repServeur2/fichier ...
 ```
 
 ---
 
 ## 5. Description des tests
 
-Les tests complets sont décrits dans le fichier `tests.txt`. Voici un résumé des
-scénarios couverts, dans l'ordre des questions du sujet :
+Les tests complets sont décrits dans le fichier `tests.txt`. Les fichiers de test
+(`hello.txt`, `large.txt`) sont à placer dans `repServeur/` et `upload.txt` dans
+`repClient/` avant le premier lancement. À chaque `./server`, les répertoires
+`repServeurN/` sont réinitialisés depuis `repServeur/`, ce qui garantit un état
+de départ identique et reproductible pour chaque session de test.
 
 | Question | Scénario testé |
-|----------|---------------|
-| Q1–Q3 | Connexion de base, envoi d'un GET, réception et vérification du fichier |
-| Q4 | Arrêt propre du serveur (Ctrl+C), vérification qu'aucun fils ne reste |
-| Q5 | Séparation des répertoires repServeur/ et repClient/ |
-| Q6–Q7 | GET d'un fichier inexistant : message d'erreur sans plantage |
-| Q8 | GET d'un fichier > MAXCHAR : transfert multi-blocs, vérification par diff |
-| Q9 | Plusieurs GET sur une même connexion avant bye |
-| Q10 | Interruption Ctrl+C pendant un GET, reprise à l'offset correct au relancement |
-| Q11–Q12 | Démarrage du serveur : vérification de l'enregistrement des 2 esclaves |
-| Q13 | Redirection vers esclave, tourniquet vérifié sur deux terminaux simultanés |
-| Q15 | ls : liste correcte du répertoire, mise à jour dynamique |
-| Q16 put | put après login, vérification diff, propagation aux deux esclaves |
-| Q16 rm | rm après login, fichier absent du disque et du ls, propagation, rm inexistant |
-| Q17 | put/rm sans login refusés, mauvais mdp refusé, login valide accepté, état par connexion |
-| Robustesse | Survie esclave après Ctrl+C client, clients séquentiels, commande invalide |
+|----------|----------------|
+| Q1–Q3 | Connexion de base, GET, vérification du fichier reçu par diff |
+| Q4 | Arrêt propre (Ctrl+C), vérification qu'aucun esclave ne reste |
+| Q5 | Séparation repServeurN/ et repClient/ |
+| Q6–Q7 | GET fichier inexistant : erreur sans plantage |
+| Q8 | GET fichier > MAXCHAR : transfert multi-blocs, diff |
+| Q9 | Plusieurs GET sur une même connexion |
+| Q10 | Ctrl+C pendant GET, reprise à l'offset correct |
+| Q11–Q12 | Enregistrement des esclaves et création de repServeurN/ |
+| Q13 | Tourniquet : deux clients simultanés sur deux esclaves différents |
+| Q15 | ls : listing de repServeurN/ affiché chez le client |
+| Q16 put | put après login, diff, propagation vérifiée dans repServeur1/ |
+| Q16 rm | rm après login, absent de repServeur0/ et repServeur1/ |
+| Q17 | put/rm sans login refusés, mauvais mdp, login valide, état par connexion |
+| Robustesse | Survie après Ctrl+C client, commande invalide |
 
 ---
 
 ## 6. Difficultés rencontrées et choix techniques
+
+**Répertoires individuels par esclave** : chaque esclave reçoit un index du maître
+via `execv` et construit son répertoire de travail `repServeurN/` au démarrage.
+Il y copie le contenu de `repServeur/` (répertoire de référence) via `cp -rf`,
+ce qui garantit un état initial identique à chaque lancement. La commande `SYNC`
+propage ensuite les modifications entre ces répertoires distincts, rendant la
+démonstration de la cohérence éventuelle observable directement sur le système de
+fichiers.
 
 **Gestion de SIGPIPE** : lorsqu'un client se déconnecte abruptement, toute écriture
 sur le socket mort génère `SIGPIPE`, qui tue le processus par défaut. Nous ignorons
@@ -215,20 +236,17 @@ d'autres clients.
 
 **Wrappers fatals vs. non-fatals** : dans `apply_request`, toutes les lectures et
 écritures réseau utilisent les fonctions minuscules (`rio_readn`, `rio_writen`)
-pour que le processus ne se termine pas sur une erreur réseau. Les wrappers majuscules
-(`Rio_readn`, `Rio_writen`) sont conservés uniquement dans les phases d'initialisation
-où une erreur est effectivement irrécupérable.
+pour que le processus ne se termine pas sur une erreur réseau. Les wrappers
+majuscules (`Rio_readn`, `Rio_writen`) sont conservés uniquement dans les phases
+d'initialisation où une erreur est effectivement irrécupérable.
 
 **Transmission de la liste des esclaves** : pour que chaque esclave connaisse les
-adresses de ses pairs (nécessaire pour la propagation), le maître garde les connexions
-d'enregistrement ouvertes jusqu'à ce que tous les esclaves soient enregistrés, puis
-envoie la `slave_list_t` complète à chacun dans la foulée de l'accusé de réception.
+adresses de ses pairs (nécessaire pour la propagation), le maître garde les
+connexions d'enregistrement ouvertes jusqu'à ce que tous les esclaves soient
+enregistrés, puis envoie la `slave_list_t` complète à chacun dans la foulée de
+l'accusé de réception.
 
-**Conflits de noms dans le switch** : le compilateur C ne permet pas de déclarer des
-variables dans deux branches d'un `switch` avec le même nom sans blocs `{}`. Chaque
-`case` complexe a été encapsulé dans un bloc pour éviter ces conflits.
-
-**Encodage des identifiants de login** : la structure `request_t` ne dispose que d'un
-champ `filename` comme zone de texte. Nous l'utilisons pour transporter les identifiants
-sous la forme `"login:password"`, séparés par un caractère `:`, que l'esclave parse avec
-`strchr`.
+**Encodage des identifiants de login** : la structure `request_t` ne dispose que
+d'un champ `filename` comme zone de texte libre. Nous l'utilisons pour transporter
+les identifiants sous la forme `"login:password"`, séparés par un caractère `:`,
+que l'esclave parse avec `strchr`.

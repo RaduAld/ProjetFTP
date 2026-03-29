@@ -1,0 +1,2 @@
+Contenu du fichier local utilisé pour tester la commande put.
+Ce fichier sera téléversé sur le serveur lors des tests Q16.

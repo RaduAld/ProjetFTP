@@ -2,7 +2,7 @@
 #include "types.h"
 
 #define NPROC 5
-#define NB_SLAVES 2
+#define NB_SLAVES 5
 #define MASTER_PORT 2121
 #define SLAVE_REG_PORT 2120 //pour l'enregistrement des esclaves
 #define SLAVE_BASE_PORT 2122 // les esclaves écoutent sur 2122, 2123, ...
@@ -43,13 +43,16 @@ int main(int argc, char **argv)
  
         char slave_port_str[16];
         char reg_port_str[16];
-        snprintf(slave_port_str, sizeof(slave_port_str), "%d", slave_port);
-        snprintf(reg_port_str,   sizeof(reg_port_str),   "%d", SLAVE_REG_PORT);
+        // index de l'esclave passé en argument pour qu'il construise son propre répertoire
+        char slave_index_str[16];
+        snprintf(slave_port_str,  sizeof(slave_port_str),  "%d", slave_port);
+        snprintf(reg_port_str,    sizeof(reg_port_str),    "%d", SLAVE_REG_PORT);
+        snprintf(slave_index_str, sizeof(slave_index_str), "%d", i);
  
         pid_t spid = Fork();
         if (spid == 0) { // Fils : devient le processus esclave
-            // argv attendu par esclave : ./esclave <master_host> <master_reg_port> <my_port>
-            char *args[] = { "./esclave", "localhost", reg_port_str, slave_port_str, NULL };
+            // argv attendu par esclave : ./esclave <master_host> <master_reg_port> <my_port> <index>
+            char *args[] = { "./esclave", "localhost", reg_port_str, slave_port_str, slave_index_str, NULL };
             execv(args[0], args);
             // Execv ne retourne jamais en cas de succes
             fprintf(stderr, "Erreur: impossible de lancer ./esclave\n");
@@ -80,7 +83,6 @@ int main(int argc, char **argv)
         strncpy(slave_ips[i], reg_resp.data, MAXLINE);
         printf("Maître : esclave %d enregistré — %s:%d\n",
                i, slave_ips[i], slave_ports[i]);
-
     }
 
     // Maintenant qu'on connait tous les esclaves, on envoie a chacun:

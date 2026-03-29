@@ -2,7 +2,8 @@
 #include "types.h"
 
 // Serveur esclave
-// Usage : ./esclave <master_host> <master_reg_port> <my_port>
+// Usage : ./esclave <master_host> <master_reg_port> <my_port> <index>
+// <index> est passe par le maitre et determine le repertoire de travail : repServeur<index>/
 
 // returns:
 //      0 - connexion terminee normalement (client a ferme la connexion)
@@ -25,6 +26,9 @@ static const user_t USERS[] = {
 // liste des esclaves pairs recue du maitre pour propagation
 static slave_list_t peers;
 static int my_port_global;
+
+// répertoire de travail propre à cet esclave (ex: "./repServeur2/")
+static char my_repdir[MAXLINE];
 
 // envoie une reponse simple et retourne ok (msg optionnel)
 int send_simple(int connfd, typereq_t type, int status,
@@ -94,6 +98,11 @@ void propagate(typereq_t op, const char *filename,
     }
 }
 
+// construit le chemin complet vers un fichier dans le répertoire de cet esclave
+static void make_path(char *out, size_t outsz, const char *filename) {
+    snprintf(out, outsz, "%s%s", my_repdir, filename);
+}
+
 int apply_request(int connfd){
     size_t n;
     request_t req;
@@ -114,8 +123,8 @@ int apply_request(int connfd){
         switch(req.type) {
             case GET: {
                 printf("Handling GET request for file: %s\n", req.filename);
-                char path[MAXLINE] = "./repServeur/";
-                strcat(path, req.filename);
+                char path[MAXLINE];
+                make_path(path, sizeof(path), req.filename);
 
                 int fd = open(path, O_RDONLY);
 
@@ -200,8 +209,8 @@ int apply_request(int connfd){
                     break;
                 }
 
-                char path[MAXLINE] = "./repServeur/";
-                strcat(path, req.filename);
+                char path[MAXLINE];
+                make_path(path, sizeof(path), req.filename);
 
                 int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
                 if (fd < 0) {
@@ -245,7 +254,10 @@ int apply_request(int connfd){
             }
             case LS: {
                 printf("Handling LS request\n");
-                FILE *fp = popen("ls ./repServeur/", "r");
+                // construire la commande ls avec le répertoire propre à cet esclave
+                char ls_cmd[MAXLINE+3];
+                snprintf(ls_cmd, sizeof(ls_cmd), "ls %s", my_repdir);
+                FILE *fp = popen(ls_cmd, "r");
                 if (!fp) {
                     send_simple(connfd, LS, -1, true, "Erreur: Impossible de lister les fichiers");
                     break;
@@ -288,8 +300,8 @@ int apply_request(int connfd){
                     break;
                 }
 
-                char path[MAXLINE] = "./repServeur/";
-                strcat(path, req.filename);
+                char path[MAXLINE];
+                make_path(path, sizeof(path), req.filename);
 
                 if (unlink(path) < 0) {
                     send_simple(connfd, RM, -1, true,
@@ -307,14 +319,14 @@ int apply_request(int connfd){
                 typereq_t op = (typereq_t)req.offset; // PUT ou RM dans offset
 
                 if (op == RM) {
-                    char path[MAXLINE] = "./repServeur/";
-                    strcat(path, req.filename);
+                    char path[MAXLINE];
+                    make_path(path, sizeof(path), req.filename);
                     unlink(path);
                     send_simple(connfd, SYNC, 0, true, "ok");
 
                 } else if (op == PUT) {
-                    char path[MAXLINE] = "./repServeur/";
-                    strcat(path, req.filename);
+                    char path[MAXLINE];
+                    make_path(path, sizeof(path), req.filename);
                     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 
                     response_t bloc;
@@ -379,20 +391,37 @@ int apply_request(int connfd){
 
 int main(int argc, char **argv)
 {
-    if (argc != 4) {
-        fprintf(stderr, "usage: %s <master_host> <master_reg_port> <my_port>\n", argv[0]);
+    if (argc != 5) {
+        fprintf(stderr, "usage: %s <master_host> <master_reg_port> <my_port> <index>\n", argv[0]);
         exit(1);
     }
 
     Signal(SIGPIPE, SIG_IGN);
  
-    char *master_host    = argv[1];
+    char *master_host     = argv[1];
     int   master_reg_port = atoi(argv[2]);
-    my_port_global         = atoi(argv[3]);
+    my_port_global        = atoi(argv[3]);
+    int   my_index        = atoi(argv[4]);
+
+    // construire le repertoire de travail propre a cet esclave
+    snprintf(my_repdir, sizeof(my_repdir), "./repServeur%d/", my_index);
+
+    // creer le repertoire s'il n'existe pas encore et l'initialise depuis le rep original
+    // cp -rn copie uniquement les fichiers qui n'existent pas encore
+    mkdir(my_repdir, 0755);
+    char init_cmd[MAXLINE + 22];
+    snprintf(init_cmd, sizeof(init_cmd), "cp -rf ./repServeur/. %s", my_repdir);
+    if (system(init_cmd) != 0) {
+        fprintf(stderr, "[Esclave %d] Avertissement: impossible de copier repServeur/ vers %s\n",
+                my_index, my_repdir);
+    } else {
+        printf("[Esclave %d] Répertoire initialisé depuis repServeur/\n", my_index);
+    }
 
     // ouvrir le port d'ecoute de cet esclave
     int listenfd = Open_listenfd(my_port_global);
-    printf("[Esclave] Port d'écoute ouvert sur %d\n", my_port_global);
+    printf("[Esclave %d] Port d'écoute ouvert sur %d, répertoire : %s\n",
+           my_index, my_port_global, my_repdir);
 
     // l'esclave s'enregistre au maitre
     // il envoye un message PORT:
@@ -403,7 +432,7 @@ int main(int argc, char **argv)
     // determine l'adresse IP de l'esclave
     char my_host[MAXLINE];
     if (gethostname(my_host, sizeof(my_host)) != 0) {
-        printf("[Esclave] Erreur lors de la récupération du nom d'hôte.\n");
+        printf("[Esclave %d] Erreur lors de la récupération du nom d'hôte.\n", my_index);
         strncpy(my_host, master_host, MAXLINE);
     }
 
@@ -421,7 +450,7 @@ int main(int argc, char **argv)
     ntoh_resp(&conf_msg);
 
     if (conf_msg.type != PORT || conf_msg.status != 0) {
-        fprintf(stderr, "[Esclave] Enregistrement refusé par le maître.\n");
+        fprintf(stderr, "[Esclave %d] Enregistrement refusé par le maître.\n", my_index);
         Close(reg_fd);
         exit(1);
     }
@@ -436,8 +465,8 @@ int main(int argc, char **argv)
     }
 
     Close(reg_fd);
-    printf("[Esclave] Enregistré auprès du maître (%s:%d). En attente de clients...\n",
-           master_host, master_reg_port);
+    printf("[Esclave %d] Enregistré auprès du maître (%s:%d). En attente de clients...\n",
+           my_index, master_host, master_reg_port);
 
     // Traitement de requetes de clients
     socklen_t clientlen;
@@ -446,21 +475,20 @@ int main(int argc, char **argv)
 
     while (1) {
         int connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen);
-        printf("[Esclave] Connexion acceptée depuis %s:%d\n",
-               inet_ntoa(clientaddr.sin_addr), ntohs(clientaddr.sin_port));
+        printf("[Esclave %d] Connexion acceptée depuis %s:%d\n",
+               my_index, inet_ntoa(clientaddr.sin_addr), ntohs(clientaddr.sin_port));
  
         int status = apply_request(connfd);
         Close(connfd);
 
         if (status == 1) {
-            printf("[Esclave] Client déconnecté (BYE), remise en attente.\n");
+            printf("[Esclave %d] Client déconnecté (BYE), remise en attente.\n", my_index);
         } else if(status == -1) {
-            printf("[Esclave] Client interrompu en cours de transfert, remise en attente.\n");
+            printf("[Esclave %d] Client interrompu en cours de transfert, remise en attente.\n", my_index);
         } else {
-            printf("[Esclave] Requête traitée, remise en attente.\n");
+            printf("[Esclave %d] Requête traitée, remise en attente.\n", my_index);
         }
     }
-
 
     return 0;
 }
