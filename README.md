@@ -1,6 +1,7 @@
 # Compte-rendu — Projet Transfert de Fichiers (FTP)
-**Introduction aux Systèmes et Réseaux — L3 Informatique — Université Grenoble Alpes**
+**Alice ROUGIER & Radu-Mihai ALDEA**
 
+**Introduction aux Systèmes et Réseaux — L3 Informatique — Université Grenoble Alpes**
 ---
 
 ## 1. Présentation générale
