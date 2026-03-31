@@ -131,11 +131,11 @@ int main(int argc, char **argv)
     printf("Démarrage du pool de %d processus sur le port %d...\n", NPROC, MASTER_PORT);
 
     for (int i = 0; i < NPROC; i++) {
-        if ((pid = Fork()) == 0) { //Fils
+        if ((pid = Fork()) == 0) { // child
+            tourniquet = i % NB_SLAVES;
             while (1) {
                 // sockaddr = SA
                 int connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen);
-
                 // choisir un esclave
                 int chosen = tourniquet;
                 tourniquet = (tourniquet + 1) % NB_SLAVES;
